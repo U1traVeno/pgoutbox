@@ -15,9 +15,43 @@ Event Bus System Based on PostgreSQL - Lightweight and Reliable Event Processing
 
 TODO
 
+## What pg-event-bus IS NOT
+
+pg-event-bus is not intended to replace: 
+
+- RabbitMQ
+- Redis Streams
+- Kafka
+- NATS
+- Cloud-native message brokers
+
+Specifically, it is not suitable for:
+
+- High-throughput event streaming
+- Large fan-out pub/sub workloads
+- Cross-datacenter or internet-scale messaging
+- Heavy payload delivery
+
+If you need throughput, fan-out, or decoupled consumers, use a real message broker.
+
 ## Why Use pg-event-bus
 
+You are likely a good fit if:
+
+- Your application is mostly local or monolithic
+- You control the PostgreSQL instance
+- You have long-running or expensive external jobs
+- Losing or duplicating an event would cause real cost
+- You already rely on PostgreSQL for correctness
+
 ## Why Not Use pg-event-bus
+
+You should probably not use this if:
+
+- Your system is microservice-heavy
+- You need horizontal scaling across regions
+- You expect burst traffic or high fan-out
+- You treat events as best-effort signals
 
 ## API Reference
 
