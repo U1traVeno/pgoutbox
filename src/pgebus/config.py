@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Callable, Dict, Optional
+import os
+from pathlib import Path
+from typing import Any, Callable, Dict, Optional, Tuple, Type
 
 from pydantic import BaseModel, ConfigDict, Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, InitSettingsSource, PydanticBaseSettingsSource, SettingsConfigDict, TomlConfigSettingsSource, YamlConfigSettingsSource
 
 JsonSerializer = Callable[[Any], str]
 JsonDeserializer = Callable[[str], Any]
@@ -128,14 +130,101 @@ class EventSystemConfig(BaseModel):
     )
 
 
+class EnvVarFileConfigSettingsSource(InitSettingsSource):
+    """
+    一个从环境变量中指定的文件加载配置的源。
+    它会根据文件扩展名自动选择 TOML 或 YAML 解析器。
+    """
+
+    def __init__(
+        self,
+        settings_cls: Type[BaseSettings],
+        env_var: str = "PGEBUS_CONFIG_FILE",
+        env_file_encoding: Optional[str] = None,
+    ):
+        """
+        Args:
+            settings_cls: The settings class.
+            env_var: The name of the environment variable to read the file path from.
+            env_file_encoding: The encoding to use for YAML files.
+        """
+        self.env_var = env_var
+        self.file_path_str = os.getenv(env_var)
+        self.encoding = env_file_encoding
+
+        file_data: Dict[str, Any] = {}
+
+        if not self.file_path_str:
+            super().__init__(settings_cls, file_data)
+            return
+
+        if not Path(self.file_path_str).expanduser().is_absolute():
+            raise ValueError(
+                f"Environment variable '{self.env_var}' must point to an absolute path"
+            )
+
+        file_path = Path(self.file_path_str)
+        if not file_path.exists():
+            print(f"警告: 环境变量 '{self.env_var}' 指向的文件 '{file_path}' 不存在。")
+
+        # 根据文件扩展名，复用现有的源逻辑
+        suffix = file_path.suffix.lower()
+        if suffix == ".toml":
+            # 内部创建一个 TomlConfigSettingsSource 实例来加载文件
+            file_data = TomlConfigSettingsSource(
+                settings_cls, toml_file=file_path
+            ).toml_data
+        elif suffix in (".yaml", ".yml"):
+            # 内部创建一个 YamlConfigSettingsSource 实例来加载文件
+            file_data = YamlConfigSettingsSource(
+                settings_cls, yaml_file=file_path, yaml_file_encoding=self.encoding
+            ).yaml_data
+        else:
+            print(f"警告: 不支持的文件类型 '{suffix}'。已忽略。")
+
+        # 调用 InitSettingsSource 的 __init__，传入从文件中加载的数据
+        super().__init__(settings_cls, file_data)
+
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}(env_var={self.env_var}, file_path={self.file_path_str!r})"
+
+
+
 class Settings(BaseSettings):
     """pgebus 配置（仅包含 DB 与事件系统）。"""
 
     model_config = SettingsConfigDict(
+        toml_file=Path("pgebus.toml"),
+        yaml_file=Path("pgebus.yaml") or Path("pgebus.yml"),
+        yaml_file_encoding="utf-8",
         env_prefix="PGEBUS_",
         env_nested_delimiter="__",
-        extra="ignore",
     )
 
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     event_system: EventSystemConfig = Field(default_factory=EventSystemConfig)
+
+    @classmethod
+    def settings_customise_sources(
+        cls: Type["Settings"],
+        settings_cls: Type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> Tuple[PydanticBaseSettingsSource, ...]:
+        """
+        定义不同配置源的优先级。
+        参见: https://docs.pydantic.dev/latest/concepts/pydantic_settings/#customise-settings-sources
+        """
+        return (
+            init_settings,
+            # Custom Source
+            EnvVarFileConfigSettingsSource(settings_cls),
+            env_settings,
+            dotenv_settings,
+            # https://docs.pydantic.dev/latest/concepts/pydantic_settings/#other-settings-source
+            TomlConfigSettingsSource(settings_cls),
+            YamlConfigSettingsSource(settings_cls),
+            file_secret_settings,
+        )
